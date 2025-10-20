@@ -24,7 +24,11 @@ from pprint import pprint
 from config_loader import ConfigLoader
 from datetime import datetime
 import telebot
-from typing import Dict
+from typing import Dict, List
+from bitrix_send import bitrix_start_bp
+from logger_setup import get_logger
+
+logger = get_logger(__name__)
 
 
 # >>> Настройки <<<
@@ -35,6 +39,7 @@ RE_INN = re.compile(r'^\s*INN\s+(\d+)\s*$')
 RE_ORG = re.compile(r'^\s*ORG\s+(.+?)\s*$')
 RE_ADR = re.compile(r'^\s*ADR\s+(.+?)\s*$')
 RE_ZN  = re.compile(r'^\s*ZN\s+(\S+)\s*$')
+RE_SROK  = re.compile(r'^\s*SROK\s+(\S+)\s*$')
 
 def iter_lines(path: Path):
     """Итератор по строкам с попытками декодировки: utf-8 → cp1251 → utf-8(errors=ignore)."""
@@ -62,38 +67,47 @@ def parse_file(path: Path):
       (inn, org_set, zn_set, adr_set, prefix2)
     где prefix2 — первые 2 символа от имени файла (basename).
     """
-    inn = None
-    zn_set, adr_set = set(), set()
-    org = ''
-    prefix2 = path.name[:2].upper() if path.name else ""
+    inn = 'no_inn'
+    zn = 'no_zn'
+    adr = 'no_adr'
+    org = 'no_org'
+    srok = '??.??.????'
+    prefix2 = path.name[:2].upper() if path.name else "no_prefix"
 
     for raw in iter_lines(path):
         line = raw.strip()
         if not line:
             continue
-
         m = RE_INN.match(line)
         if m:
             inn = m.group(1)
             continue
-
         m = RE_ORG.match(line)
         if m:
-            # org_set.add(m.group(1).replace('\"', '').upper())
             org = m.group(1).replace('\"', '').upper()
             continue
-
         m = RE_ADR.match(line)
         if m:
-            adr_set.add(m.group(1))
+            adr = m.group(1)
             continue
-
         m = RE_ZN.match(line)
         if m:
-            zn_set.add(m.group(1))
+            zn = m.group(1)
             continue
+        m = RE_SROK.match(line)
+        if m:
+            srok = m.group(1)
+            continue
+    dict_out = {
+        'inn': inn,
+        'org': org,
+        'zn': zn,
+        'adr': adr,
+        'prefix': prefix2,
+        'srok':srok
+    }
 
-    return inn, org, zn_set, adr_set, prefix2
+    return dict_out
 
 def pattern_file_name() -> str:
     """
@@ -122,44 +136,15 @@ def build_summary_by_inn(root: Path):
     groups = {}  # inn -> {'org_names': set(), 'zn': set(), 'adresses': set(), 'prefixes': set()}
     # ищем примерно такое '4f1_kassir1_25.03.2026_0422010007047405.txt'
     pattern = pattern_file_name()
+    result = []
     for p in root.rglob(pattern):
         if not p.is_file():
             continue
 
-        inn, org_set, zn_set, adr_set, prefix2 = parse_file(p)
-        if not inn:
-            continue
-
-        bucket = groups.setdefault(inn, {
-            'org_names': str(),
-            'zn': set(),
-            'adresses': set(),
-            'prefixes': set(),
-            'paths': set()
-        })
-        bucket['org_names'] = org_set
-        bucket['zn'].update(zn_set)
-        bucket['adresses'].update(adr_set)
-        if prefix2:
-            bucket['prefixes'].add(prefix2)
-        bucket['paths'].add(str(p))
-    # Преобразуем в список словарей
-    result = []
-    for inn, data in groups.items():
-        org_display = data['org_names']
-        adrs = sorted(a.strip() for a in data['adresses'] if a and a.strip())
-        idxs = sorted(x.strip() for x in data['prefixes'] if x and x.strip())
-        paths = data['paths']
-
-        result.append({
-            'inn': inn,
-            'org': org_display,
-            'count': len(data['zn']),
-            'indexes': idxs,          # список первых 2 символов имён файлов
-            'adresses': adrs,         # оставляю ключ как вы просили
-            'paths': paths
-        })
-
+        # inn, org_set, zn_set, adr_set, prefix2 = parse_file(p)
+        squeeze_fn = parse_file(p)
+        squeeze_fn['path'] = str(p)
+        result.append(squeeze_fn)
     # Сортируем по INN и ORG
     result.sort(key=lambda r: (r['inn'], r['org']))
     return result
@@ -185,7 +170,7 @@ def send_order_to_tg(result: Dict = None,
     work_id = config.get('telegram', 'tg_id')
     for row in result:
         addresses_part = "; ".join(row['adresses']) if row['adresses'] else ""
-        line = f"{row['inn']}, {row['org']}, {row['count']} шт., {row['indexes']}"
+        line = f"{row['inn']}, {row['org']}, {row['count']} шт., {row['prefix']}"
         if addresses_part:
             line += f", {addresses_part}"
             my_mess = f'заказ ФН:\n{line}'
@@ -195,16 +180,66 @@ def send_order_to_tg(result: Dict = None,
             except Exception as exs:
                 print(exs)
 
+def bitrix_groupe_result(list_in: List = None):
+    """
+    группируем результат по префиксам магазинов чтобы задачи поставить в битрикс
+    :param list_in: список словарей с данными ФН
+    :return:
+    список словарей с данными ФН сгруппированные по торговым точкам
+    """
+    list_out = []
+    prefix_groups = {}
+    for item in list_in:
+        prefix = item['prefix']
+        if prefix not in prefix_groups:
+            prefix_groups[prefix] = {
+                'prefix': prefix,
+                'inn': item['inn'],
+                'org': item['org'],
+                'adresses': [],
+            }
+        prefix_groups[prefix]['adresses'].append(item['adr'])
+    for prefix, info in prefix_groups.items():
+        info['count'] = len(info['adresses'])
+        list_out.append(info)
+    print(list_out)
+    return list_out
+
+def make_task_bitrix(list_in: List = None, config: ConfigLoader = None):
+    """
+    проход по списку
+    :param list_in:
+    :param config:
+    :return:
+    """
+    for elem in list_in:
+        data = {
+            "REST_USER_ID": config.get('bitrix', 'user_id', as_type=int),
+            "TITLE_TASK": f'замена ФН {elem["prefix"]} - {elem["count"]} шт.',
+            "ADDRESS": f'{elem["adresses"][0]}',
+            "DESCRIPTION_TASK": f'заменить ФН {elem["prefix"]} - {elem["count"]} шт.',
+            "LOCATION": f'{elem["adresses"][0]}',
+            "DAYS_DEADLINE": "1"
+        }
+        result_req_bitrix = bitrix_start_bp(config=config, data_about_fn=data)
+        logger.info(f'реультат обращения к битриксу {result_req_bitrix}')
+
 
 def main():
+    logger.info(f'запустили скрипт')
     config = ConfigLoader("config.ini")
+    logger.info(f'прочитали конфиг')
     ROOT = Path(config.get('local', 'path'))
     OUTPUT_TXT = "summary_by_inn.txt"
     result = build_summary_by_inn(ROOT)
+    logger.info(f'собрали инфу по нужныи ФН {result}')
     if PRINT_LIST_TO_CONSOLE:
         pprint(result, width=120, compact=True)
-    save_text(result, OUTPUT_TXT)
-    send_order_to_tg(result=result, config=config)
+    list_for_bitrix = bitrix_groupe_result(list_in=result)
+    logger.info(f'преобразовали инфу для битрикса')
+    # make_task_bitrix(list_in=list_for_bitrix, config=config)
+    logger.info(f'преобразовали инфу для битрикса')
+    send_order_to_tg(result=list_for_bitrix, config=config)
     print(f"\nГотово: {OUTPUT_TXT} (записано строк: {len(result)})")
 
 if __name__ == "__main__":
