@@ -20,7 +20,7 @@ def get_logger(name: str = None) -> logging.Logger:
     # Формат логов
     log_format = (
         "%(asctime)s | %(levelname)-8s | "
-        "module=%(module)s | path=%(pathname)s | "
+        "module=%(module)s | path=%(pathname)s | line=%(lineno)d | "
         "msg=%(message)s"
     )
 

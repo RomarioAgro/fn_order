@@ -31,9 +31,6 @@ from logger_setup import get_logger
 logger = get_logger(__name__)
 
 
-# >>> Настройки <<<
-PRINT_LIST_TO_CONSOLE = False            # вывести список словарей в консоль
-
 # Регулярные выражения для парсинга
 RE_INN = re.compile(r'^\s*INN\s+(\d+)\s*$')
 RE_ORG = re.compile(r'^\s*ORG\s+(.+?)\s*$')
@@ -229,12 +226,12 @@ def main():
     logger.info(f'запустили скрипт')
     config = ConfigLoader("config.ini")
     logger.info(f'прочитали конфиг')
-    ROOT = Path(config.get('local', 'path'))
-    OUTPUT_TXT = "summary_by_inn.txt"
+    try:
+        ROOT = Path(config.get('local', 'path'))
+    except Exception as exc:
+        logger.info(f'ошибка получения корня папки {exc}')
     result = build_summary_by_inn(ROOT)
-    logger.info(f'собрали инфу по нужныи ФН {result}')
-    if PRINT_LIST_TO_CONSOLE:
-        pprint(result, width=120, compact=True)
+    logger.info(f'собрали инфу по нужным ФН {result}')
     list_for_bitrix = bitrix_groupe_result(list_in=result)
     logger.info(f'преобразовали инфу для битрикса')
     make_task_bitrix(list_in=list_for_bitrix, config=config)
