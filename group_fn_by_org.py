@@ -70,7 +70,6 @@ def parse_file(path: Path):
     org = 'no_org'
     srok = '??.??.????'
     prefix2 = path.name[:2].upper() if path.name else "no_prefix"
-
     for raw in iter_lines(path):
         line = raw.strip()
         if not line:
@@ -95,6 +94,8 @@ def parse_file(path: Path):
         if m:
             srok = m.group(1)
             continue
+    if prefix2 == 'XX':
+        prefix2 = org + '_' + adr
     dict_out = {
         'inn': inn,
         'org': org,
@@ -137,8 +138,6 @@ def build_summary_by_inn(root: Path):
     for p in root.rglob(pattern):
         if not p.is_file():
             continue
-
-        # inn, org_set, zn_set, adr_set, prefix2 = parse_file(p)
         squeeze_fn = parse_file(p)
         squeeze_fn['path'] = str(p)
         result.append(squeeze_fn)
@@ -167,7 +166,7 @@ def send_order_to_tg(result: Dict = None,
     work_id = config.get('telegram', 'tg_id')
     for row in result:
         addresses_part = "; ".join(row['adresses']) if row['adresses'] else ""
-        line = f"{row['inn']}, {row['org']}, {row['count']} шт., {row['prefix']}"
+        line = f"{row['inn']}, {row['org']},\n {row['count']} шт.,\n {row['prefix']}, \nсрок {row['srok']}\n"
         if addresses_part:
             line += f", {addresses_part}"
             my_mess = f'заказ ФН:\n{line}'
@@ -194,12 +193,16 @@ def bitrix_groupe_result(list_in: List = None):
                 'inn': item['inn'],
                 'org': item['org'],
                 'adresses': [],
+                'srok':  []
             }
         prefix_groups[prefix]['adresses'].append(item['adr'])
+        prefix_groups[prefix]['srok'].append(datetime.strptime(item.get('srok', '01.01.1970'), '%d.%m.%Y'))
     for prefix, info in prefix_groups.items():
         info['count'] = len(info['adresses'])
+        srok = min(info['srok'])
+        info['srok'] = srok.strftime('%d.%m.%Y')
         list_out.append(info)
-    print(list_out)
+
     return list_out
 
 def make_task_bitrix(list_in: List = None, config: ConfigLoader = None):
