@@ -32,7 +32,7 @@ logger = get_logger(__name__)
 
 
 # >>> Настройки <<<
-PRINT_LIST_TO_CONSOLE = True            # вывести список словарей в консоль
+PRINT_LIST_TO_CONSOLE = False            # вывести список словарей в консоль
 
 # Регулярные выражения для парсинга
 RE_INN = re.compile(r'^\s*INN\s+(\d+)\s*$')
@@ -237,10 +237,11 @@ def main():
         pprint(result, width=120, compact=True)
     list_for_bitrix = bitrix_groupe_result(list_in=result)
     logger.info(f'преобразовали инфу для битрикса')
-    # make_task_bitrix(list_in=list_for_bitrix, config=config)
-    logger.info(f'преобразовали инфу для битрикса')
+    make_task_bitrix(list_in=list_for_bitrix, config=config)
+    logger.info(f'запустили задачи в битриксе')
     send_order_to_tg(result=list_for_bitrix, config=config)
-    print(f"\nГотово: {OUTPUT_TXT} (записано строк: {len(result)})")
+    logger.info(f'отправили сообщения в телеграм о заказе ФН')
+
 
 if __name__ == "__main__":
     main()
