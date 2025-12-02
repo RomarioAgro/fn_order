@@ -11,7 +11,7 @@ def get_logger(name: str = None) -> logging.Logger:
     """
 
     # Папка для логов — системная временная
-    log_dir = os.path.join(tempfile.gettempdir(), "app_logs")
+    log_dir = os.path.join(tempfile.gettempdir(), "_fn_order")
     os.makedirs(log_dir, exist_ok=True)
 
     # Имя файла лога с датой
